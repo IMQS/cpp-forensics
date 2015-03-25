@@ -6,4 +6,4 @@ Run test server
 
 Deploy to appengine
 
-	goapp deploy -oauth -application imqs-forensics appengine-try-g
+	goapp deploy -oauth -application imqs-forensics
