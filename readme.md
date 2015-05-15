@@ -2,7 +2,7 @@ Run test server
 
 	env
 	gcloud config set project imqs-forensics
-	gcloud preview app run .
+	gcloud preview app run app.yaml
 
 Deploy to appengine
 

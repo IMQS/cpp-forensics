@@ -126,6 +126,7 @@ func dbFetchDump(w http.ResponseWriter, r *http.Request) {
 	id := guidString(r.URL.Query().Get("id"))
 	c := appengine.NewContext(r)
 	attach := fetchAttachment(c, minidumpKind, id)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"minidump-%v.mdmp\"", id))
 	blobstore.Send(w, attach.Blob)
 }
 

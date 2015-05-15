@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -27,7 +28,8 @@ func showHome(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	q := datastore.NewQuery(eventKind).Order("-Date").Limit(60)
 	var events []Event
-	if _, err := q.GetAll(c, &events); err != nil {
+	keys, err := q.GetAll(c, &events)
+	if err != nil {
 		panic(err)
 	}
 
@@ -44,10 +46,12 @@ func showHome(w http.ResponseWriter, r *http.Request) {
 
 	mid := ""
 	for i, ev := range events {
+		id := decodeGuidString(keys[i].StringID())
 		mid += fmt.Sprintf("<div id='trace-line-%v' class='line'>", i)
 		mid += "<div class='date'>" + html.EscapeString(ev.Date.Format(time.RFC822Z)) + "</div>"
 		mid += "<div class='appname'>" + html.EscapeString(ev.AppName) + "</div>"
 		mid += "<div class='host'>" + html.EscapeString(ev.Host) + "</div>"
+		mid += "<a class='downloadlink' href='fetch-dump?id=" + html.EscapeString(url.QueryEscape(string(id))) + "''><div class='minidump'>M</div></a>"
 		if ev.DumpAnalysis == "" {
 			mid += "<div class='trace-heading'>No stack trace yet</div>"
 		} else {
@@ -101,6 +105,10 @@ $boot(function onboot() {
 `
 
 const htmlStyles = `
+	.downloadlink {
+		display: inline-block;
+		width: 2em;
+	}
 	.line {
 		display: block;
 		margin: 2px 2px 2px 2px;
