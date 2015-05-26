@@ -1,1 +1,4 @@
+*.pem
+*.p12
+src/code.google.com/p/go-uuid/.hg
 pkg

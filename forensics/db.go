@@ -1,12 +1,18 @@
 package forensics
 
 import (
-	"appengine"
-	"appengine/blobstore"
-	"appengine/datastore"
 	"code.google.com/p/go-uuid/uuid"
 	"encoding/ascii85"
 	"fmt"
+	"golang.org/x/net/context"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/appengine"
+	"google.golang.org/appengine/datastore"
+	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/urlfetch"
+	"google.golang.org/cloud"
+	"google.golang.org/cloud/storage"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -18,6 +24,8 @@ const eventKind = "Event"
 const minidumpKind = "MiniDump"
 const alblogKind = "AlbLog"
 const albvidKind = "AlbVid"
+
+const gcsBucket = "imqs-forensics-blobs"
 
 const singleAttachmentKey = 1
 
@@ -31,14 +39,23 @@ type Event struct {
 }
 
 type Attachment struct {
-	Blob       appengine.BlobKey `datastore:",noindex"`
 	IsAnalyzed bool
+}
+
+func newCloudContext(appengineContext context.Context) context.Context {
+	hc := &http.Client{
+		Transport: &oauth2.Transport{
+			Source: google.AppEngineTokenSource(appengineContext, storage.ScopeFullControl),
+			Base:   &urlfetch.Transport{Context: appengineContext},
+		},
+	}
+	return cloud.NewContext(appengine.AppID(appengineContext), hc)
 }
 
 func dbWriteDump(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 
-	id := guidString(r.URL.Query().Get("id"))
+	id := makeGuidString(r.URL.Query().Get("id"))
 	host := r.URL.Query().Get("host")
 	if id == "" {
 		panic(fmt.Errorf("No 'id' specified"))
@@ -51,6 +68,7 @@ func dbWriteDump(w http.ResponseWriter, r *http.Request) {
 	paths := strings.Split(r.URL.Path, "/")
 	blobtype := ""
 	if len(paths) >= 3 {
+		// We assume that in this code path, ContentLength != 0
 		blobtype = paths[2]
 	}
 
@@ -70,26 +88,20 @@ func dbWriteDump(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var blobKey appengine.BlobKey
 	if r.ContentLength != 0 {
-		blobWriter, err := blobstore.Create(c, "application/octet-stream")
+		ctx := newCloudContext(c)
+		fileWriter := storage.NewWriter(ctx, gcsBucket, gcsFilename(blobtype, id))
+		fileWriter.ContentType = "application/octet-stream"
+		written, err := io.Copy(fileWriter, r.Body)
 		if err != nil {
 			panic(err)
 		}
-		if _, err = io.Copy(blobWriter, r.Body); err != nil {
-			panic(err)
-		}
+		err = fileWriter.Close()
 		r.Body.Close()
-		if err = blobWriter.Close(); err != nil {
-			panic(err)
-		}
-		blobKey, err = blobWriter.Key()
-		if err != nil {
-			panic(err)
-		}
+		log.Debugf(c, "Wrote %v bytes to %v/%v (%v)", written, gcsBucket, gcsFilename(blobtype, id), err)
 
+		// Write 'Attachment' record, which is a child of the event record
 		attachment := &Attachment{
-			Blob:       blobKey,
 			IsAnalyzed: false,
 		}
 		blobKind := blobTypeToKind(blobtype)
@@ -122,16 +134,27 @@ func dbFetchDumpList(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(ids))
 }
 
+// We could probably do this better by making the dumps public and just linking directly to them,
+// but this works alright.
 func dbFetchDump(w http.ResponseWriter, r *http.Request) {
-	id := guidString(r.URL.Query().Get("id"))
+	id := makeGuidString(r.URL.Query().Get("id"))
 	c := appengine.NewContext(r)
-	attach := fetchAttachment(c, minidumpKind, id)
+
+	ctx := newCloudContext(c)
+	fileReader, err := storage.NewReader(ctx, gcsBucket, gcsFilename(kindToBlobType(minidumpKind), id))
+	if err != nil {
+		log.Errorf(c, "Unable to read minidump %v/%v: %v", gcsBucket, gcsFilename(kindToBlobType(minidumpKind), id), err)
+		panic(err)
+	}
+	defer fileReader.Close()
+
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"minidump-%v.mdmp\"", id))
-	blobstore.Send(w, attach.Blob)
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, fileReader)
 }
 
 func dbWriteAnalysis(w http.ResponseWriter, r *http.Request) {
-	id := guidString(r.URL.Query().Get("id"))
+	id := makeGuidString(r.URL.Query().Get("id"))
 	c := appengine.NewContext(r)
 	attach := fetchAttachment(c, minidumpKind, id)
 	attach.IsAnalyzed = true
@@ -154,15 +177,15 @@ func dbWriteAnalysis(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "", http.StatusOK)
 }
 
-func eventKey(c appengine.Context, id guidString) *datastore.Key {
+func eventKey(c context.Context, id guidString) *datastore.Key {
 	return datastore.NewKey(c, eventKind, encodeGuidString(id), 0, nil)
 }
 
-func attachmentKey(c appengine.Context, kind string, id guidString) *datastore.Key {
+func attachmentKey(c context.Context, kind string, id guidString) *datastore.Key {
 	return datastore.NewKey(c, kind, "", singleAttachmentKey, eventKey(c, id))
 }
 
-func fetchAttachment(c appengine.Context, kind string, id guidString) *Attachment {
+func fetchAttachment(c context.Context, kind string, id guidString) *Attachment {
 	attach := &Attachment{}
 	if err := datastore.Get(c, attachmentKey(c, kind, id), attach); err != nil {
 		panic(err)
@@ -170,12 +193,28 @@ func fetchAttachment(c appengine.Context, kind string, id guidString) *Attachmen
 	return attach
 }
 
-func fetchEvent(c appengine.Context, id guidString) *Event {
+func gcsFilename(blobType string, id guidString) string {
+	return blobType + "/dump-" + string(id) + ".mdmp"
+}
+
+func fetchEvent(c context.Context, id guidString) *Event {
 	event := &Event{}
 	if err := datastore.Get(c, eventKey(c, id), event); err != nil {
 		panic(err)
 	}
 	return event
+}
+
+func kindToBlobType(kind string) string {
+	switch kind {
+	case minidumpKind:
+		return "minidump"
+	case albvidKind:
+		return "albvid"
+	case alblogKind:
+		return "alblog"
+	}
+	return "unknown"
 }
 
 func blobTypeToKind(blobType string) string {
@@ -190,6 +229,10 @@ func blobTypeToKind(blobType string) string {
 	return "unknown"
 }
 
+func makeGuidString(guid string) guidString {
+	return guidString(strings.ToLower(guid))
+}
+
 func encodeGuidString(guid guidString) string {
 	u := uuid.Parse(string(guid))
 	encoded := [20]byte{}
@@ -201,5 +244,5 @@ func decodeGuidString(ascii85_guid string) guidString {
 	decoded := [16]byte{}
 	ascii85.Decode(decoded[:], []byte(ascii85_guid), true)
 	g := uuid.UUID(decoded[:])
-	return guidString(g.String())
+	return makeGuidString(g.String())
 }

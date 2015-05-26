@@ -1,1 +1,1 @@
-set GOPATH=%~dp0;C:\dev\tools\GoogleCloudSDK\google-cloud-sdk\platform\google_appengine\goroot
+set GOPATH=C:\dev\individual\appengine-goroot;C:\dev\tools\GoogleCloudSDK\google-cloud-sdk\platform\google_appengine\goroot;%~dp0
