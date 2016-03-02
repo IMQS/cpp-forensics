@@ -1,5 +1,7 @@
 Download dependencies
 
+	Download and install `Google App Engine SDK for Go` into C:\dev\tools\GoAppEngineSDK
+
 	set GOPATH=<this directory>\..\appengine-goroot  (it doesn't matter what directory you use here, so long as it's outside of the project root)
 	go get google.golang.org/cloud
 	go get google.golang.org/cloud/storage

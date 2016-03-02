@@ -115,9 +115,32 @@ func dbWriteDump(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "", http.StatusOK)
 }
 
+func dbDelete(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	host := r.URL.Query().Get("Host")
+	if host == "" {
+		http.Error(w, "No host specified", http.StatusBadRequest)
+		return
+	}
+
+	q := datastore.NewQuery(eventKind).Filter("Host=", host).Limit(500).KeysOnly()
+	keys, err := q.GetAll(c, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err = datastore.DeleteMulti(c, keys); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Error(w, fmt.Sprintf("Deleted %v elements", len(keys)), http.StatusOK)
+}
+
 func dbFetchDumpList(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
-	q := datastore.NewQuery(minidumpKind).Filter("IsAnalyzed =", false).Limit(10).KeysOnly()
+	q := datastore.NewQuery(minidumpKind).Filter("IsAnalyzed=", false).Limit(10).KeysOnly()
 	keys, err := q.GetAll(c, nil)
 	if err != nil {
 		panic(err)

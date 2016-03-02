@@ -22,5 +22,6 @@ func init() {
 	http.HandleFunc("/fetch-dump-list", makeHandler(dbFetchDumpList))
 	http.HandleFunc("/fetch-dump", makeHandler(dbFetchDump))
 	http.HandleFunc("/write-analysis", makeHandler(dbWriteAnalysis))
+	http.HandleFunc("/delete", makeHandler(dbDelete))
 	http.HandleFunc("/", makeHandler(showHome))
 }
