@@ -1,18 +1,14 @@
 package forensics
 
 import (
+	"cloud.google.com/go/storage"
 	"code.google.com/p/go-uuid/uuid"
 	"encoding/ascii85"
 	"fmt"
 	"golang.org/x/net/context"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
-	"google.golang.org/appengine/urlfetch"
-	"google.golang.org/cloud"
-	"google.golang.org/cloud/storage"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -42,14 +38,12 @@ type Attachment struct {
 	IsAnalyzed bool
 }
 
-func newCloudContext(appengineContext context.Context) context.Context {
-	hc := &http.Client{
-		Transport: &oauth2.Transport{
-			Source: google.AppEngineTokenSource(appengineContext, storage.ScopeFullControl),
-			Base:   &urlfetch.Transport{Context: appengineContext},
-		},
+func newCloudClient(c context.Context) (*storage.Client, error) {
+	client, err := storage.NewClient(c)
+	if err != nil {
+		log.Errorf(c, "Failed to create storage client: %v", err)
 	}
-	return cloud.NewContext(appengine.AppID(appengineContext), hc)
+	return client, err
 }
 
 func dbWriteDump(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +83,15 @@ func dbWriteDump(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.ContentLength != 0 {
-		ctx := newCloudContext(c)
-		fileWriter := storage.NewWriter(ctx, gcsBucket, gcsFilename(blobtype, id))
+		client, err := newCloudClient(c)
+		if err != nil {
+			panic(err)
+		}
+		defer client.Close()
+
+		bucket := client.Bucket(gcsBucket)
+
+		fileWriter := bucket.Object(gcsFilename(blobtype, id)).NewWriter(c)
 		fileWriter.ContentType = "application/octet-stream"
 		written, err := io.Copy(fileWriter, r.Body)
 		if err != nil {
@@ -162,9 +163,14 @@ func dbFetchDumpList(w http.ResponseWriter, r *http.Request) {
 func dbFetchDump(w http.ResponseWriter, r *http.Request) {
 	id := makeGuidString(r.URL.Query().Get("id"))
 	c := appengine.NewContext(r)
+	client, err := newCloudClient(c)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Close()
+	bucket := client.Bucket(gcsBucket)
 
-	ctx := newCloudContext(c)
-	fileReader, err := storage.NewReader(ctx, gcsBucket, gcsFilename(kindToBlobType(minidumpKind), id))
+	fileReader, err := bucket.Object(gcsFilename(kindToBlobType(minidumpKind), id)).NewReader(c)
 	if err != nil {
 		log.Errorf(c, "Unable to read minidump %v/%v: %v", gcsBucket, gcsFilename(kindToBlobType(minidumpKind), id), err)
 		panic(err)
