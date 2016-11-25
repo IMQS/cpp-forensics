@@ -13,4 +13,4 @@ Run test server
 
 Deploy to appengine
 
-	goapp deploy -application imqs-forensics
+	deploy.bat
