@@ -1,1 +1,1 @@
-..\..\tools\GoAppEngineSDK\goapp deploy -application imqs-forensics
+goapp deploy -application imqs-forensics  -version %1
